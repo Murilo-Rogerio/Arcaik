@@ -1,5 +1,5 @@
-import { Check, ListTodo, PenLine, Plus, X } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { Check, FileText, ImagePlus, ListTodo, PenLine, Plus, X } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
 import { useData } from '../store/DataContext'
 import type { Note, NoteKind, TodoItem } from '../lib/types'
 import { cn, todayStr } from '../lib/utils'
@@ -17,7 +17,7 @@ type Props = {
 const emptyItem = (): TodoItem => ({ id: crypto.randomUUID(), text: '', done: false })
 
 export default function NoteEditor({ open, note, defaultKind = 'note', defaultDue = null, onClose }: Props) {
-  const { upsertNote, deleteNote } = useData()
+  const { upsertNote, deleteNote, attachments, uploadAttachment, deleteAttachment } = useData()
   const toast = useToast()
 
   const [kind, setKind] = useState<NoteKind>(defaultKind)
@@ -28,6 +28,8 @@ export default function NoteEditor({ open, note, defaultKind = 'note', defaultDu
   const [tagIds, setTagIds] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
   const [focusId, setFocusId] = useState<string | null>(null)
+  const [pending, setPending] = useState<File[]>([])
+  const fileInput = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => {
     if (!open) return
@@ -37,6 +39,7 @@ export default function NoteEditor({ open, note, defaultKind = 'note', defaultDu
     setItems(note?.items?.length ? note.items : [emptyItem()])
     setDue(note?.due_at ?? defaultDue ?? '')
     setTagIds(note?.tag_ids ?? [])
+    setPending([])
   }, [open, note, defaultKind, defaultDue])
 
   useEffect(() => {
@@ -45,6 +48,17 @@ export default function NoteEditor({ open, note, defaultKind = 'note', defaultDu
       setFocusId(null)
     }
   }, [focusId, items])
+
+  const existing = note ? attachments.filter((a) => a.note_id === note.id) : []
+
+  const addFiles = (files: File[]) => {
+    const ok = files.filter((f) => f.size <= 10 * 1024 * 1024)
+    const tooBig = files.length - ok.length
+    if (tooBig > 0) toast(`${tooBig} arquivo(s) acima de 10 MB foi(ram) ignorado(s).`, 'error')
+    if (ok.length) setPending((p) => [...p, ...ok])
+  }
+
+  const removePending = (index: number) => setPending((p) => p.filter((_, i) => i !== index))
 
   const updateItem = (id: string, text: string) =>
     setItems((list) => list.map((i) => (i.id === id ? { ...i, text } : i)))
@@ -63,7 +77,7 @@ export default function NoteEditor({ open, note, defaultKind = 'note', defaultDu
   }
 
   const valid =
-    title.trim() !== '' || content.trim() !== '' || items.some((i) => i.text.trim() !== '')
+    title.trim() !== '' || content.trim() !== '' || items.some((i) => i.text.trim() !== '') || pending.length > 0
 
   const save = async () => {
     if (!valid || saving) return
@@ -80,10 +94,12 @@ export default function NoteEditor({ open, note, defaultKind = 'note', defaultDu
       due_at: due || null,
       tag_ids: tagIds,
     })
-    setSaving(false)
     if (saved) {
+      for (const file of pending) await uploadAttachment(saved.id, file)
       toast(note ? 'Nota atualizada' : 'Nota criada')
       onClose()
+    } else {
+      setSaving(false)
     }
   }
 
@@ -92,12 +108,10 @@ export default function NoteEditor({ open, note, defaultKind = 'note', defaultDu
       <div className="space-y-5">
         {!note && (
           <div className="grid grid-cols-2 gap-1 rounded-xl border border-hairline/10 bg-surface/5 p-1">
-            {(
-              [
-                { k: 'note' as NoteKind, label: 'Nota', icon: PenLine },
-                { k: 'todo' as NoteKind, label: 'Lista', icon: ListTodo },
-              ]
-            ).map((opt) => (
+            {[
+              { k: 'note' as NoteKind, label: 'Nota', icon: PenLine },
+              { k: 'todo' as NoteKind, label: 'Lista', icon: ListTodo },
+            ].map((opt) => (
               <button
                 key={opt.k}
                 type="button"
@@ -125,10 +139,17 @@ export default function NoteEditor({ open, note, defaultKind = 'note', defaultDu
         {kind === 'note' ? (
           <Textarea
             label="Conteúdo"
-            placeholder="Escreva à vontade…"
+            placeholder="Escreva à vontade… (Ctrl+V cola imagem)"
             rows={6}
             value={content}
             onChange={(e) => setContent(e.target.value)}
+            onPaste={(e) => {
+              const files = Array.from(e.clipboardData.files)
+              if (files.length > 0) {
+                e.preventDefault()
+                addFiles(files)
+              }
+            }}
           />
         ) : (
           <div>
@@ -186,6 +207,75 @@ export default function NoteEditor({ open, note, defaultKind = 'note', defaultDu
             </button>
           </div>
         )}
+
+        <div>
+          <span className="mb-1.5 block text-[13px] font-medium text-ink-2">Anexos</span>
+          <div className="flex flex-wrap gap-2.5">
+            {existing.map((a) => (
+              <div key={a.id} className="relative">
+                {a.mime.startsWith('image/') ? (
+                  <img src={a.url} alt={a.name} className="size-20 rounded-xl border border-hairline/10 object-cover" />
+                ) : (
+                  <div className="flex h-20 w-32 shrink-0 items-center gap-1.5 rounded-xl border border-hairline/10 bg-surface/5 px-2.5 text-[11px] text-ink-2">
+                    <FileText size={14} className="shrink-0 text-ink-3" />
+                    <span className="truncate">{a.name}</span>
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={() => deleteAttachment(a.id)}
+                  aria-label="Remover anexo"
+                  className="absolute -right-1.5 -top-1.5 grid size-5 place-items-center rounded-full border border-hairline/10 bg-bg text-ink-2 shadow-card hover:text-red-400"
+                >
+                  <X size={11} />
+                </button>
+              </div>
+            ))}
+            {pending.map((f, i) => (
+              <div key={f.name + i} className="relative">
+                {f.type.startsWith('image/') ? (
+                  <img
+                    src={URL.createObjectURL(f)}
+                    alt={f.name}
+                    className="size-20 rounded-xl border border-dashed border-accent/50 object-cover"
+                  />
+                ) : (
+                  <div className="flex h-20 w-32 shrink-0 items-center gap-1.5 rounded-xl border border-dashed border-accent/50 bg-surface/5 px-2.5 text-[11px] text-ink-2">
+                    <FileText size={14} className="shrink-0 text-ink-3" />
+                    <span className="truncate">{f.name}</span>
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={() => removePending(i)}
+                  aria-label="Remover"
+                  className="absolute -right-1.5 -top-1.5 grid size-5 place-items-center rounded-full border border-hairline/10 bg-bg text-ink-2 shadow-card hover:text-red-400"
+                >
+                  <X size={11} />
+                </button>
+              </div>
+            ))}
+            <button
+              type="button"
+              onClick={() => fileInput.current?.click()}
+              className="flex size-20 flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-hairline/25 text-ink-3 transition hover:border-accent/40 hover:text-accent"
+            >
+              <ImagePlus size={18} />
+              <span className="text-[10px] font-medium">anexar</span>
+            </button>
+          </div>
+          <input
+            ref={fileInput}
+            type="file"
+            multiple
+            hidden
+            onChange={(e) => {
+              addFiles(Array.from(e.target.files ?? []))
+              e.target.value = ''
+            }}
+          />
+          <p className="mt-2 font-mono text-[10px] text-ink-3">imagens e arquivos até 10 MB</p>
+        </div>
 
         <div className="flex items-end gap-2.5">
           <label className="flex-1">
