@@ -1,8 +1,10 @@
 import { motion } from 'framer-motion'
 import { Check, FileText } from 'lucide-react'
+import { useState } from 'react'
 import { useData } from '../store/DataContext'
 import type { Note, Tag } from '../lib/types'
 import { cn, relativeTime } from '../lib/utils'
+import PhotoViewer from './PhotoViewer'
 import { ConfirmButton, DueBadge, TagPill } from './ui'
 
 export default function NoteCard({
@@ -15,8 +17,10 @@ export default function NoteCard({
   onEdit: () => void
 }) {
   const { toggleTodo, deleteNote, attachments } = useData()
+  const [viewer, setViewer] = useState<number | null>(null)
   const myTags = tags.filter((t) => note.tag_ids?.includes(t.id))
   const myAttachments = attachments.filter((a) => a.note_id === note.id)
+  const photos = myAttachments.filter((a) => a.mime.startsWith('image/') && a.url)
   const items = note.items ?? []
   const visible = items.slice(0, 4)
   const done = items.filter((i) => i.done).length
@@ -74,12 +78,19 @@ export default function NoteCard({
         <div className="mt-3 flex flex-wrap gap-2">
           {myAttachments.slice(0, 4).map((a) =>
             a.mime.startsWith('image/') ? (
-              <img
+              <button
                 key={a.id}
-                src={a.url}
-                alt={a.name}
-                className="size-16 rounded-lg border border-hairline/10 object-cover"
-              />
+                type="button"
+                onClick={() => setViewer(Math.max(0, photos.findIndex((p) => p.id === a.id)))}
+                aria-label={`Abrir ${a.name}`}
+                className="overflow-hidden rounded-lg border border-hairline/10"
+              >
+                <img
+                  src={a.url}
+                  alt={a.name}
+                  className="size-16 object-cover transition duration-300 hover:scale-105"
+                />
+              </button>
             ) : (
               <div
                 key={a.id}
@@ -113,6 +124,10 @@ export default function NoteCard({
         </span>
         <ConfirmButton onConfirm={() => deleteNote(note.id)} />
       </div>
+
+      {viewer !== null && photos.length > 0 && (
+        <PhotoViewer photos={photos} startIndex={viewer} onClose={() => setViewer(null)} />
+      )}
     </motion.div>
   )
 }
