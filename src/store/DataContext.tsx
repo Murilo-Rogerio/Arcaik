@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from 'react'
 import { supabase } from '../lib/supabase'
-import type { MediaItem, Note, Tag, TodoItem } from '../lib/types'
+import type { Attachment, MediaItem, Note, Tag, TodoItem } from '../lib/types'
 import { useAuth } from '../hooks/AuthContext'
 import { useToast } from '../components/ui'
 
@@ -35,6 +35,7 @@ type DataCtx = {
   tags: Tag[]
   notes: Note[]
   media: MediaItem[]
+  attachments: Attachment[]
   createTag: (name: string, color: string) => Promise<Tag | null>
   deleteTag: (id: string) => Promise<void>
   upsertNote: (input: NoteInput) => Promise<Note | null>
@@ -42,6 +43,8 @@ type DataCtx = {
   toggleTodo: (noteId: string, itemId: string) => Promise<void>
   saveMedia: (input: MediaInput) => Promise<MediaItem | null>
   deleteMedia: (id: string) => Promise<void>
+  uploadAttachment: (noteId: string, file: File) => Promise<Attachment | null>
+  deleteAttachment: (id: string) => Promise<void>
 }
 
 const Ctx = createContext<DataCtx | null>(null)
@@ -55,21 +58,34 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [tags, setTags] = useState<Tag[]>([])
   const [notes, setNotes] = useState<Note[]>([])
   const [media, setMedia] = useState<MediaItem[]>([])
+  const [attachments, setAttachments] = useState<Attachment[]>([])
 
   const load = useCallback(async () => {
     if (!uid) return
     setLoading(true)
-    const [t, n, m] = await Promise.all([
+    const [t, n, m, a] = await Promise.all([
       supabase!.from('tags').select('*').order('created_at', { ascending: true }),
       supabase!.from('notes').select('*').order('updated_at', { ascending: false }),
       supabase!.from('media_items').select('*').order('created_at', { ascending: false }),
+      supabase!.from('note_attachments').select('*'),
     ])
-    if (t.error || n.error || m.error) {
-      toast('Não foi possível carregar seus dados. Você rodou o supabase/schema.sql?', 'error')
+    if (t.error || n.error || m.error || a.error) {
+      toast('Não foi possível carregar seus dados. Você rodou o schema.sql e o SQL de anexos?', 'error')
     } else {
       setTags((t.data ?? []) as Tag[])
       setNotes((n.data ?? []) as Note[])
       setMedia((m.data ?? []) as MediaItem[])
+      const rows = (a.data ?? []) as Attachment[]
+      const urls = new Map<string, string>()
+      if (rows.length) {
+        const { data: signed } = await supabase!
+          .storage.from('attachments')
+          .createSignedUrls(rows.map((r) => r.storage_path), 60 * 60 * 24)
+        for (const s of signed ?? []) {
+          if (s.path && s.signedUrl) urls.set(s.path, s.signedUrl)
+        }
+      }
+      setAttachments(rows.map((r) => ({ ...r, url: urls.get(r.storage_path) })))
     }
     setLoading(false)
   }, [uid, toast])
@@ -142,14 +158,17 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
   const deleteNote = useCallback(
     async (id: string) => {
+      const paths = attachments.filter((x) => x.note_id === id).map((x) => x.storage_path)
+      if (paths.length) await supabase!.storage.from('attachments').remove(paths)
       setNotes((s) => s.filter((n) => n.id !== id))
+      setAttachments((s) => s.filter((x) => x.note_id !== id))
       const { error } = await supabase!.from('notes').delete().eq('id', id)
       if (error) {
         toast('Não foi possível excluir a nota.', 'error')
         load()
       }
     },
-    [load, toast],
+    [attachments, load, toast],
   )
 
   const toggleTodo = useCallback(
@@ -157,7 +176,6 @@ export function DataProvider({ children }: { children: ReactNode }) {
       const note = notes.find((n) => n.id === noteId)
       if (!note?.items) return
       const items = note.items.map((i) => (i.id === itemId ? { ...i, done: !i.done } : i))
-      // Atualização otimista: o check aparece na hora; rollback se falhar.
       setNotes((s) => s.map((n) => (n.id === noteId ? { ...n, items } : n)))
       const { error } = await supabase!
         .from('notes')
@@ -209,12 +227,72 @@ export function DataProvider({ children }: { children: ReactNode }) {
     [load, toast],
   )
 
+  const uploadAttachment = useCallback(
+    async (noteId: string, file: File): Promise<Attachment | null> => {
+      if (!uid) return null
+      const safeName = file.name.replace(/[^\w.\- ]+/g, '_') || 'arquivo'
+      const path = `${uid}/${crypto.randomUUID()}-${safeName}`
+      const { error: upErr } = await supabase!
+        .storage.from('attachments')
+        .upload(path, file, { contentType: file.type || undefined })
+      if (upErr) {
+        toast(
+          /size/i.test(upErr.message)
+            ? 'Arquivo grande demais — o limite é 10 MB.'
+            : 'Não foi possível enviar o arquivo.',
+          'error',
+        )
+        return null
+      }
+      const { data, error } = await supabase!
+        .from('note_attachments')
+        .insert({
+          user_id: uid,
+          note_id: noteId,
+          storage_path: path,
+          name: file.name,
+          mime: file.type || 'application/octet-stream',
+          size: file.size,
+        })
+        .select()
+        .single()
+      if (error) {
+        await supabase!.storage.from('attachments').remove([path])
+        toast('Não foi possível registrar o anexo.', 'error')
+        return null
+      }
+      const row = data as Attachment
+      const { data: signed } = await supabase!
+        .storage.from('attachments')
+        .createSignedUrl(path, 60 * 60 * 24)
+      const withUrl = { ...row, url: signed?.signedUrl }
+      setAttachments((s) => [...s, withUrl])
+      return withUrl
+    },
+    [uid, toast],
+  )
+
+  const deleteAttachment = useCallback(
+    async (id: string) => {
+      const att = attachments.find((x) => x.id === id)
+      setAttachments((s) => s.filter((x) => x.id !== id))
+      if (att) await supabase!.storage.from('attachments').remove([att.storage_path])
+      const { error } = await supabase!.from('note_attachments').delete().eq('id', id)
+      if (error) {
+        toast('Não foi possível excluir o anexo.', 'error')
+        load()
+      }
+    },
+    [attachments, load, toast],
+  )
+
   const value = useMemo(
     () => ({
       loading,
       tags,
       notes,
       media,
+      attachments,
       createTag,
       deleteTag,
       upsertNote,
@@ -222,8 +300,25 @@ export function DataProvider({ children }: { children: ReactNode }) {
       toggleTodo,
       saveMedia,
       deleteMedia,
+      uploadAttachment,
+      deleteAttachment,
     }),
-    [loading, tags, notes, media, createTag, deleteTag, upsertNote, deleteNote, toggleTodo, saveMedia, deleteMedia],
+    [
+      loading,
+      tags,
+      notes,
+      media,
+      attachments,
+      createTag,
+      deleteTag,
+      upsertNote,
+      deleteNote,
+      toggleTodo,
+      saveMedia,
+      deleteMedia,
+      uploadAttachment,
+      deleteAttachment,
+    ],
   )
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
