@@ -88,3 +88,7 @@ body::after {
     display: none;
   }
 }
+
+.yarl__container {
+  z-index: 200 !important;
+}
