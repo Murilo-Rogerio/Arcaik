@@ -40,8 +40,18 @@ export type Profile = {
   created_at: string
 }
 
-/** Paleta curada para etiquetas (funciona nos dois temas) */
 export const TAG_COLORS = [
   '#FF7A59', '#FFB454', '#F2DE5C', '#A6D96A', '#4FD1A1',
   '#54C0DC', '#6FA8E8', '#A99BE8', '#E88BB5', '#9AA4B2',
 ] as const
+export type Attachment = {
+  id: string
+  user_id: string
+  note_id: string
+  storage_path: string
+  name: string
+  mime: string
+  size: number
+  created_at: string
+  url?: string
+}
