@@ -16,6 +16,30 @@ type Props = {
 
 const emptyItem = (): TodoItem => ({ id: crypto.randomUUID(), text: '', done: false })
 
+/** Encolhe fotos antes do upload (uma foto de 5 MB vira ~300 KB). */
+async function compressImage(file: File): Promise<File> {
+  if (!file.type.startsWith('image/')) return file
+  try {
+    const bitmap = await createImageBitmap(file)
+    const max = 1600
+    const scale = Math.min(1, max / Math.max(bitmap.width, bitmap.height))
+    if (scale >= 1 && file.size <= 600 * 1024) return file
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.round(bitmap.width * scale)
+    canvas.height = Math.round(bitmap.height * scale)
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return file
+    ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
+    const blob = await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob((b) => resolve(b), 'image/jpeg', 0.85),
+    )
+    if (!blob || blob.size >= file.size) return file
+    return new File([blob], file.name.replace(/\.[^.]+$/, '') + '.jpg', { type: 'image/jpeg' })
+  } catch {
+    return file
+  }
+}
+
 export default function NoteEditor({ open, note, defaultKind = 'note', defaultDue = null, onClose }: Props) {
   const { upsertNote, deleteNote, attachments, uploadAttachment, deleteAttachment } = useData()
   const toast = useToast()
@@ -51,10 +75,15 @@ export default function NoteEditor({ open, note, defaultKind = 'note', defaultDu
 
   const existing = note ? attachments.filter((a) => a.note_id === note.id) : []
 
-  const addFiles = (files: File[]) => {
-    const ok = files.filter((f) => f.size <= 10 * 1024 * 1024)
-    const tooBig = files.length - ok.length
-    if (tooBig > 0) toast(`${tooBig} arquivo(s) acima de 10 MB foi(ram) ignorado(s).`, 'error')
+  const addFiles = async (files: File[]) => {
+    const ok: File[] = []
+    for (const f of files) {
+      if (f.size > 10 * 1024 * 1024) {
+        toast(`${f.name} passou de 10 MB e foi ignorado.`, 'error')
+        continue
+      }
+      ok.push(await compressImage(f))
+    }
     if (ok.length) setPending((p) => [...p, ...ok])
   }
 
@@ -82,23 +111,26 @@ export default function NoteEditor({ open, note, defaultKind = 'note', defaultDu
   const save = async () => {
     if (!valid || saving) return
     setSaving(true)
-    const cleanItems = items
-      .filter((i) => i.text.trim() !== '')
-      .map((i) => ({ ...i, text: i.text.trim() }))
-    const saved = await upsertNote({
-      id: note?.id,
-      kind,
-      title: title.trim(),
-      content: kind === 'note' ? content.trim() || null : null,
-      items: kind === 'todo' ? cleanItems : null,
-      due_at: due || null,
-      tag_ids: tagIds,
-    })
-    if (saved) {
+    try {
+      const cleanItems = items
+        .filter((i) => i.text.trim() !== '')
+        .map((i) => ({ ...i, text: i.text.trim() }))
+      const saved = await upsertNote({
+        id: note?.id,
+        kind,
+        title: title.trim(),
+        content: kind === 'note' ? content.trim() || null : null,
+        items: kind === 'todo' ? cleanItems : null,
+        due_at: due || null,
+        tag_ids: tagIds,
+      })
+      if (!saved) return
       for (const file of pending) await uploadAttachment(saved.id, file)
       toast(note ? 'Nota atualizada' : 'Nota criada')
       onClose()
-    } else {
+    } catch {
+      toast('Algo falhou ao salvar — tente novamente.', 'error')
+    } finally {
       setSaving(false)
     }
   }
