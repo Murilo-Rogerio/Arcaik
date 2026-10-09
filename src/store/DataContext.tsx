@@ -63,31 +63,42 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const load = useCallback(async () => {
     if (!uid) return
     setLoading(true)
-    const [t, n, m, a] = await Promise.all([
-      supabase!.from('tags').select('*').order('created_at', { ascending: true }),
-      supabase!.from('notes').select('*').order('updated_at', { ascending: false }),
-      supabase!.from('media_items').select('*').order('created_at', { ascending: false }),
-      supabase!.from('note_attachments').select('*'),
-    ])
-    if (t.error || n.error || m.error || a.error) {
-      toast('Não foi possível carregar seus dados. Você rodou o schema.sql e o SQL de anexos?', 'error')
-    } else {
-      setTags((t.data ?? []) as Tag[])
-      setNotes((n.data ?? []) as Note[])
-      setMedia((m.data ?? []) as MediaItem[])
-      const rows = (a.data ?? []) as Attachment[]
-      const urls = new Map<string, string>()
-      if (rows.length) {
-        const { data: signed } = await supabase!
-          .storage.from('attachments')
-          .createSignedUrls(rows.map((r) => r.storage_path), 60 * 60 * 24)
-        for (const s of signed ?? []) {
-          if (s.path && s.signedUrl) urls.set(s.path, s.signedUrl)
+    try {
+      const [t, n, m, a] = await Promise.all([
+        supabase!.from('tags').select('*').order('created_at', { ascending: true }),
+        supabase!.from('notes').select('*').order('updated_at', { ascending: false }),
+        supabase!.from('media_items').select('*').order('created_at', { ascending: false }),
+        supabase!.from('note_attachments').select('*'),
+      ])
+      if (t.error) toast('Falha ao carregar as etiquetas.', 'error')
+      else setTags((t.data ?? []) as Tag[])
+      if (n.error) toast('Falha ao carregar as notas.', 'error')
+      else setNotes((n.data ?? []) as Note[])
+      if (m.error) toast('Falha ao carregar os links.', 'error')
+      else setMedia((m.data ?? []) as MediaItem[])
+      if (a.error) toast('Falha ao carregar os anexos — o SQL dos anexos rodou no Supabase?', 'error')
+      else {
+        const rows = (a.data ?? []) as Attachment[]
+        const urls = new Map<string, string>()
+        if (rows.length) {
+          try {
+            const { data: signed } = await supabase!
+              .storage.from('attachments')
+              .createSignedUrls(rows.map((r) => r.storage_path), 60 * 60 * 24)
+            for (const s of signed ?? []) {
+              if (s.path && s.signedUrl) urls.set(s.path, s.signedUrl)
+            }
+          } catch {
+            // segue sem as URLs — as imagens ganham preview no próximo carregamento
+          }
         }
+        setAttachments(rows.map((r) => ({ ...r, url: urls.get(r.storage_path) })))
       }
-      setAttachments(rows.map((r) => ({ ...r, url: urls.get(r.storage_path) })))
+    } catch {
+      toast('Sem conexão com o Supabase. Verifique sua internet.', 'error')
+    } finally {
+      setLoading(false)
     }
-    setLoading(false)
   }, [uid, toast])
 
   useEffect(() => {
