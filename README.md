@@ -1,6 +1,6 @@
 # 📱 Arcaik
 
-[![Status](https://img.shields.io/badge/Status-Concluído-brightgreen?style=flat-square)]()
+[![Status](https://img.shields.io/badge/Status-Ativo-brightgreen?style=flat-square)]()
 [![Plataforma](https://img.shields.io/badge/Plataforma-PWA%20Mobile--First-purple?style=flat-square)]()
 [![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&style=flat-square)]()
 [![TypeScript](https://img.shields.io/badge/TypeScript-Strict-blue?logo=typescript&style=flat-square)]()
