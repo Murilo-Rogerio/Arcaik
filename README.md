@@ -6,7 +6,7 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-Strict-blue?logo=typescript&style=flat-square)]()
 [![Supabase](https://img.shields.io/badge/Supabase-PostgreSQL%20%7C%20RLS-3ECF8E?logo=supabase&style=flat-square)]()
 [![Deploy](https://img.shields.io/badge/Deploy-Vercel-black?logo=vercel&style=flat-square)](https://arcaik-notes.vercel.app/)
-[![Licença](https://img.shields.io/badge/Licen%C3%A7a-MIT-blue?style=flat-square)]()
+[![Licença](https://img.shields.io/badge/Licen%C3%A7a-MIT-blue?style=flat-square)](LICENSE)
 
 > **Notas, listas de tarefas, rotinas, links e mídias — em um só app, direto na tela inicial do seu celular.**
 
